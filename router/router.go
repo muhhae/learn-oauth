@@ -29,9 +29,7 @@ func New(auth *authenticator.Authenticator) *echo.Echo {
 	store := sessions.NewCookieStore([]byte(
 		os.Getenv("STORE_SECRET"),
 	))
-
 	router.Use(session.Middleware(store))
-
 	router.GET("/", func(c echo.Context) error {
 		return c.HTML(http.StatusOK, view.Home())
 	})
@@ -60,20 +58,13 @@ func loginHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		var state string
-		sessionState := sess.Values["state"]
-		if sessionState == nil {
-			state, err := generateRandomState()
-			if err != nil {
-				return c.String(http.StatusInternalServerError, err.Error())
-			}
-			sess.Values["state"] = state
-			if err := sess.Save(c.Request(), c.Response()); err != nil {
-				return c.String(http.StatusInternalServerError, err.Error())
-			}
-
-		} else {
-			state = sessionState.(string)
+		state, err := generateRandomState()
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		sess.Values["state"] = state
+		if err := sess.Save(c.Request(), c.Response()); err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
 		}
 		return c.Redirect(http.StatusTemporaryRedirect, auth.AuthCodeURL(state))
 	}
@@ -112,7 +103,7 @@ func callbackHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		}
 		sess.Values["access_token"] = token.AccessToken
 		sess.Values["profile"] = profile
-
+		sess.Options.MaxAge = 60 * 60 * 2
 		if err := sess.Save(c.Request(), c.Response()); err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}

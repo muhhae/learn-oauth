@@ -10,10 +10,7 @@ import (
 func IsAuthenticated(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		sess, err := session.Get("session", c)
-		if err != nil {
-			return c.String(http.StatusInternalServerError, err.Error())
-		}
-		if sess.Values["profile"] == nil {
+		if err != nil || sess.Values["profile"] == nil {
 			return c.Redirect(http.StatusTemporaryRedirect, "/login")
 		}
 		return next(c)
