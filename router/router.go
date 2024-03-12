@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/gob"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,9 +16,10 @@ import (
 	"github.com/muhhae/learn-oauth/authenticator"
 	"github.com/muhhae/learn-oauth/middleware"
 	"github.com/muhhae/learn-oauth/view"
+	"golang.org/x/oauth2"
 )
 
-func New(auth *authenticator.Authenticator) *echo.Echo {
+func New(a *authenticator.Authenticator) *echo.Echo {
 	router := echo.New()
 
 	gob.Register(map[string]interface{}{})
@@ -34,10 +36,10 @@ func New(auth *authenticator.Authenticator) *echo.Echo {
 		return c.HTML(http.StatusOK, view.Home())
 	})
 
-	router.GET("/login", loginHandler(auth))
-	router.GET("/callback", callbackHandler(auth))
-	router.GET("/user", userHandler(auth), middleware.IsAuthenticated)
-	router.GET("/logout", logoutHandler(auth))
+	router.GET("/login", loginHandler(a))
+	router.GET("/callback", callbackHandler(a))
+	router.GET("/user", userHandler(a), middleware.IsAuthenticated)
+	router.GET("/logout", logoutHandler(a))
 
 	router.GET("/profile-delete", func(c echo.Context) error {
 		sess, err := session.Get("session", c)
@@ -66,7 +68,18 @@ func loginHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if err := sess.Save(c.Request(), c.Response()); err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		return c.Redirect(http.StatusTemporaryRedirect, auth.AuthCodeURL(state))
+		loginUrl := auth.AuthCodeURL(state)
+
+		if c.QueryParam("silent") == "true" {
+			loginUrl = auth.AuthCodeURL(
+				state,
+				oauth2.SetAuthURLParam("response_type", "code"),
+				oauth2.SetAuthURLParam("prompt", "none"),
+			)
+		}
+
+		fmt.Println(loginUrl)
+		return c.Redirect(http.StatusTemporaryRedirect, loginUrl)
 	}
 }
 
@@ -86,49 +99,50 @@ func callbackHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		if c.QueryParam("state") != sess.Values["state"] {
-			return c.String(http.StatusBadRequest, "Invalid state parameter")
+		if c.QueryParam("error") != "" {
+			return c.Redirect(http.StatusTemporaryRedirect, "/login")
 		}
-		token, err := auth.Exchange(c.Request().Context(), c.QueryParam("code"))
+		fmt.Println("QueryParam state", c.QueryParam("state"))
+		fmt.Println("Session state", sess.Values["state"])
+		if c.QueryParam("state") != sess.Values["state"].(string) {
+			return c.String(http.StatusBadRequest, "Invalid state parameter ")
+		}
+		token, err := auth.Exchange(c.Request().Context(), c.QueryParam("code"), oauth2.AccessTypeOffline)
 		if err != nil {
 			return c.String(http.StatusUnauthorized, "Failed to exchange authorization code for a token")
 		}
-		idToken, err := auth.VerifyIDToken(c.Request().Context(), token)
-		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to verify ID Token")
-		}
-		var profile map[string]interface{}
-		if err := idToken.Claims(&profile); err != nil {
-			return c.String(http.StatusInternalServerError, err.Error())
-		}
+
+		sess.Values["refresh_token"] = token.RefreshToken
 		sess.Values["access_token"] = token.AccessToken
-		sess.Values["profile"] = profile
-		sess.Options.MaxAge = 60 * 60 * 2
+		sess.Values["id_token"] = token.Extra("id_token")
 		if err := sess.Save(c.Request(), c.Response()); err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
+
 		return c.Redirect(http.StatusTemporaryRedirect, "/user")
 	}
 }
 
-func userHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
+func userHandler(a *authenticator.Authenticator) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		sess, err := session.Get("session", c)
 		if err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		sessionProfile := sess.Values["profile"]
-		if sessionProfile == nil {
-			return c.String(http.StatusInternalServerError, "No profile found in current session")
+		idToken := sess.Values["id_token"].(string)
+		oidToken, err := a.VerifyIDToken(c.Request().Context(), idToken)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		profile := sessionProfile.(map[string]interface{})
-		for i := range profile {
-			log.Println(i, ":", profile[i])
+		var profile map[string]interface{}
+		err = oidToken.Claims(&profile)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		return c.HTML(http.StatusOK, view.UserProfile(view.ProfileData{
-			Picture:  profile["picture"].(string),
-			Nickname: profile["name"].(string),
-		}))
+
+		profile["access_token"] = sess.Values["access_token"]
+		profile["refresh_token"] = sess.Values["refresh_token"]
+		return c.JSON(http.StatusOK, profile)
 	}
 }
 

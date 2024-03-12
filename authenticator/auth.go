@@ -2,7 +2,7 @@ package authenticator
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"os"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -19,16 +19,17 @@ func NewAuthenticator() (*Authenticator, error) {
 		context.Background(),
 		"https://"+os.Getenv("OAUTH_DOMAIN")+"/",
 	)
-
 	if err != nil {
 		return nil, err
 	}
 
+	endpoint := provider.Endpoint()
+	fmt.Println(endpoint.AuthURL)
 	conf := oauth2.Config{
 		ClientID:     os.Getenv("OAUTH_CLIENT"),
 		ClientSecret: os.Getenv("OAUTH_SECRET"),
 		RedirectURL:  os.Getenv("OAUTH_CALLBACK"),
-		Endpoint:     provider.Endpoint(),
+		Endpoint:     endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "profile"},
 	}
 
@@ -38,15 +39,10 @@ func NewAuthenticator() (*Authenticator, error) {
 	}, nil
 }
 
-func (authenticator *Authenticator) VerifyIDToken(ctx context.Context, token *oauth2.Token) (*oidc.IDToken, error) {
-	rawIDToken, ok := token.Extra("id_token").(string)
-	if !ok {
-		return nil, errors.New("no id_token field in oauth token")
-	}
-
+func (authenticator *Authenticator) VerifyIDToken(ctx context.Context, idToken string) (*oidc.IDToken, error) {
 	oidcConfig := &oidc.Config{
 		ClientID: authenticator.ClientID,
 	}
 
-	return authenticator.Verifier(oidcConfig).Verify(ctx, rawIDToken)
+	return authenticator.Verifier(oidcConfig).Verify(ctx, idToken)
 }
