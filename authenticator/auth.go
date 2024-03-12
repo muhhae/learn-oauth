@@ -30,7 +30,7 @@ func NewAuthenticator() (*Authenticator, error) {
 		ClientSecret: os.Getenv("OAUTH_SECRET"),
 		RedirectURL:  os.Getenv("OAUTH_CALLBACK"),
 		Endpoint:     endpoint,
-		Scopes:       []string{oidc.ScopeOpenID, "profile"},
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "offline_access", "email"},
 	}
 
 	return &Authenticator{

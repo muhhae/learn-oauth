@@ -37,6 +37,12 @@ func Home() string {
 				},
 			},
 			element.A{
+				Href: "/revoke",
+				Children: webtype.Children{
+					element.RawText("Revoke Refresh Token"),
+				},
+			},
+			element.A{
 				Href: "/user",
 				Children: webtype.Children{
 					element.RawText("Profile"),

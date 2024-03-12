@@ -4,11 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
@@ -40,6 +43,7 @@ func New(a *authenticator.Authenticator) *echo.Echo {
 	router.GET("/callback", callbackHandler(a))
 	router.GET("/user", userHandler(a), middleware.IsAuthenticated)
 	router.GET("/logout", logoutHandler(a))
+	router.GET("/revoke", revokeHandler(a))
 
 	router.GET("/profile-delete", func(c echo.Context) error {
 		sess, err := session.Get("session", c)
@@ -68,17 +72,16 @@ func loginHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if err := sess.Save(c.Request(), c.Response()); err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-		loginUrl := auth.AuthCodeURL(state)
+
+		var oauth2Options []oauth2.AuthCodeOption
 
 		if c.QueryParam("silent") == "true" {
-			loginUrl = auth.AuthCodeURL(
-				state,
+			oauth2Options = append(oauth2Options,
 				oauth2.SetAuthURLParam("response_type", "code"),
 				oauth2.SetAuthURLParam("prompt", "none"),
 			)
 		}
-
-		fmt.Println(loginUrl)
+		loginUrl := auth.AuthCodeURL(state, oauth2Options...)
 		return c.Redirect(http.StatusTemporaryRedirect, loginUrl)
 	}
 }
@@ -102,8 +105,6 @@ func callbackHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if c.QueryParam("error") != "" {
 			return c.Redirect(http.StatusTemporaryRedirect, "/login")
 		}
-		fmt.Println("QueryParam state", c.QueryParam("state"))
-		fmt.Println("Session state", sess.Values["state"])
 		if c.QueryParam("state") != sess.Values["state"].(string) {
 			return c.String(http.StatusBadRequest, "Invalid state parameter ")
 		}
@@ -111,14 +112,17 @@ func callbackHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		if err != nil {
 			return c.String(http.StatusUnauthorized, "Failed to exchange authorization code for a token")
 		}
-
 		sess.Values["refresh_token"] = token.RefreshToken
 		sess.Values["access_token"] = token.AccessToken
 		sess.Values["id_token"] = token.Extra("id_token")
+
+		fmt.Println("refresh_token:", token.RefreshToken)
+		fmt.Println("access_token:", token.AccessToken)
+		fmt.Println("id_token:", token.Extra("id_token"))
+
 		if err := sess.Save(c.Request(), c.Response()); err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
-
 		return c.Redirect(http.StatusTemporaryRedirect, "/user")
 	}
 }
@@ -178,4 +182,52 @@ func logoutHandler(auth *authenticator.Authenticator) echo.HandlerFunc {
 		sess.Save(c.Request(), c.Response())
 		return c.Redirect(http.StatusTemporaryRedirect, logourUrl.String())
 	}
+}
+
+func revokeHandler(a *authenticator.Authenticator) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		s, err := session.Get("session", c)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		refreshToken := s.Values["refresh_token"]
+		if refreshToken == nil {
+			return c.String(http.StatusBadRequest, "Refresh Token Not Found")
+		}
+		revokeRefreshToken(a, refreshToken.(string))
+		return c.Redirect(http.StatusTemporaryRedirect, "/")
+	}
+}
+
+func revokeRefreshToken(a *authenticator.Authenticator, rt string) error {
+	url := os.Getenv("OAUTH_DOMAIN") + "/oauth/revoke"
+	payload := map[string]string{
+		"client_id":     os.Getenv("OAUTH_CLIENT"),
+		"client_secret": os.Getenv("OAUTH_SECRET"),
+		"token":         rt,
+	}
+	jPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	p := strings.NewReader(string(jPayload))
+	// fmt.Println(url)
+	// fmt.Println(string(jPayload))
+	req, _ := http.NewRequest("POST", url, p)
+	req.Header.Add("content-type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+	return nil
 }
